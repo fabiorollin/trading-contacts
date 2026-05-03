@@ -1,0 +1,34 @@
+# Internet-facing ALB for contacts.fabiorollin.com.
+# AWS LBC provisions an ALB, attaches the wildcard *.fabiorollin.com cert,
+# and forwards 80/443 → trading-contacts service in the trading namespace.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trading-contacts-ingress
+  namespace: trading
+  labels:
+    app: trading-contacts
+    customer: acme-trading
+    compliance: mifid-ii
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:807291695385:certificate/11842121-0d3a-4e27-ae42-e6119793b896
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+spec:
+  ingressClassName: alb
+  rules:
+    - host: contacts.fabiorollin.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: trading-contacts
+                port:
+                  number: 80

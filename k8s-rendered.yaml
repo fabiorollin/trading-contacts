@@ -1,0 +1,107 @@
+﻿# Acme Trading â€” Counterparty Contacts deployment
+# Apply with:
+#   kubectl apply -f k8s.yaml
+#
+# Before applying:
+#   1. Create the schema + app user on RDS (run schema.sql)
+#   2. Build and push the container image to a registry
+#   3. Replace 807291695385.dkr.ecr.us-east-1.amazonaws.com/trading-contacts:v2 below with your image ref
+#   4. Replace TradingDemo2026! with the password you set for trading_app
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trading-contacts-db
+  namespace: trading
+type: Opaque
+stringData:
+  DB_PASSWORD: "TradingDemo2026!"
+  JWT_SECRET:  "cL5eUr6fi93BqodKnRt8XEMg1lASOsjQ7wx0kpZFDym2hYIzauCP4bvGHJWNTV"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-contacts
+  namespace: trading
+  labels:
+    app: trading-contacts
+    customer: acme-trading
+    compliance: mifid-ii
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trading-contacts
+  template:
+    metadata:
+      labels:
+        app: trading-contacts
+        customer: acme-trading
+        compliance: mifid-ii
+    spec:
+      containers:
+        - name: app
+          image: 807291695385.dkr.ecr.us-east-1.amazonaws.com/trading-contacts:v2  # rendered to v2 by deploy script
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: DB_HOST
+              value: "database-2.cluster-cilmq64861va.us-east-1.rds.amazonaws.com"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: "postgres"
+            - name: DB_USER
+              value: "trading_app"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trading-contacts-db
+                  key: DB_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trading-contacts-db
+                  key: JWT_SECRET
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-contacts
+  namespace: trading
+  labels:
+    app: trading-contacts
+spec:
+  type: ClusterIP
+  selector:
+    app: trading-contacts
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

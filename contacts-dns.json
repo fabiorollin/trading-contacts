@@ -1,0 +1,15 @@
+{
+  "Comment": "contacts.fabiorollin.com -> trading-contacts ALB",
+  "Changes": [{
+    "Action": "UPSERT",
+    "ResourceRecordSet": {
+      "Name": "contacts.fabiorollin.com",
+      "Type": "A",
+      "AliasTarget": {
+        "HostedZoneId": "Z35SXDOTRQ7X7K",
+        "DNSName": "k8s-trading-tradingc-5f4092d29b-479466249.us-east-1.elb.amazonaws.com",
+        "EvaluateTargetHealth": true
+      }
+    }
+  }]
+}

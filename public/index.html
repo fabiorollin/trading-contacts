@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Acme Trading — Counterparty Contacts</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+  <!-- ── Login screen ─────────────────────────────────────────────── -->
+  <div id="login-screen" class="hidden min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-2xl max-w-md w-full p-8">
+      <div class="text-center mb-6">
+        <div class="text-3xl mb-2">📞</div>
+        <h1 class="text-2xl font-bold text-purple-700">Acme Trading</h1>
+        <p class="text-sm text-slate-500">Counterparty Contacts &middot; Sign in to continue</p>
+      </div>
+      <form id="login-form" class="space-y-3">
+        <input type="text" id="login-username" placeholder="Username" required autocomplete="username"
+               class="w-full p-3 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500" />
+        <input type="password" id="login-password" placeholder="Password" required autocomplete="current-password"
+               class="w-full p-3 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500" />
+        <div id="login-error" class="hidden text-red-600 text-sm"></div>
+        <button type="submit" class="w-full bg-purple-700 hover:bg-purple-800 text-white py-3 rounded font-semibold">
+          Sign In
+        </button>
+      </form>
+      <div class="mt-6 text-xs text-slate-400 text-center">
+        Demo accounts: <code>sarah</code>, <code>marcus</code>, <code>priya</code>, <code>james</code> (pwd <code>trading2026</code>),
+        or <code>admin</code> (pwd <code>admin2026</code>).
+      </div>
+    </div>
+  </div>
+
+  <!-- ── App screen ───────────────────────────────────────────────── -->
+  <div id="app-screen" class="hidden">
+    <header class="bg-purple-700 text-white shadow">
+      <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">Acme Trading — Counterparty Contacts</h1>
+          <p class="text-sm text-purple-200">Trading desk softphone integration · MiFID II audit-tracked</p>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="text-right text-sm">
+            <div id="me-display" class="font-semibold"></div>
+            <div id="me-source" class="text-xs text-purple-200"></div>
+          </div>
+          <button id="btn-contacts-view" onclick="showContactsView()" class="hidden bg-white/10 text-white px-3 py-2 rounded-md text-sm hover:bg-white/20">📒 Contacts</button>
+          <button id="btn-audit-view"    onclick="showAuditView()"    class="hidden bg-white/10 text-white px-3 py-2 rounded-md text-sm hover:bg-white/20">🛡️ Audit Log</button>
+          <button id="btn-new-contact"   onclick="newContact()"       class="bg-white text-purple-700 px-4 py-2 rounded-md font-semibold hover:bg-purple-100 shadow-sm">+ New</button>
+          <button onclick="logout()" class="text-purple-200 text-sm hover:text-white">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-6 py-8">
+
+      <!-- ── Contacts view ────────────────────────────────────────── -->
+      <div id="view-contacts">
+        <div class="mb-4 flex items-center justify-between">
+          <input id="search" placeholder="Filter contacts…" class="w-72 px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+          <a href="#calls" class="text-sm text-purple-700 hover:underline">View call log ↓</a>
+        </div>
+
+        <div id="contacts" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+
+        <section id="calls" class="mt-12">
+          <h2 class="text-lg font-bold mb-3 text-slate-700">Recent calls</h2>
+          <div class="bg-white rounded-lg shadow overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-100 text-slate-600 text-left">
+                <tr>
+                  <th class="px-4 py-2">When</th>
+                  <th class="px-4 py-2">Caller</th>
+                  <th class="px-4 py-2">Counterparty</th>
+                  <th class="px-4 py-2">Phone</th>
+                </tr>
+              </thead>
+              <tbody id="call-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── Audit log view (admin only) ─────────────────────────── -->
+      <div id="view-audit" class="hidden">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-2xl font-bold text-slate-800">🛡️ Login Audit Log</h2>
+          <button onclick="loadAudit()" class="text-sm text-purple-700 hover:underline">↻ Refresh</button>
+        </div>
+        <p class="text-sm text-slate-500 mb-4">
+          Every authentication attempt against <code class="bg-slate-100 px-1 rounded">contacts.fabiorollin.com</code> is recorded — successes, failed passwords, rate-limited bursts. MiFID II–style audit trail for compliance.
+        </p>
+        <div class="bg-white rounded-lg shadow overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-100 text-slate-600 text-left">
+              <tr>
+                <th class="px-4 py-2">When</th>
+                <th class="px-4 py-2">Username</th>
+                <th class="px-4 py-2">IP Address</th>
+                <th class="px-4 py-2">Result</th>
+                <th class="px-4 py-2">Failure Reason</th>
+              </tr>
+            </thead>
+            <tbody id="audit-rows">
+              <tr><td colspan="5" class="px-4 py-6 text-slate-400 text-center">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Contact modal -->
+    <div id="modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div class="bg-white rounded-lg shadow-2xl max-w-md w-full p-6">
+        <h2 id="modal-title" class="text-xl font-bold mb-4">New Contact</h2>
+        <form id="contact-form" class="space-y-3">
+          <input type="hidden" id="f-id" />
+          <input type="text"  id="f-name"  placeholder="Name *"        required class="w-full p-2 border border-slate-300 rounded" />
+          <input type="text"  id="f-role"  placeholder="Role"                  class="w-full p-2 border border-slate-300 rounded" />
+          <input type="text"  id="f-desk"  placeholder="Desk"                  class="w-full p-2 border border-slate-300 rounded" />
+          <input type="text"  id="f-phone" placeholder="Phone (e.g. +1-555-…)*" required class="w-full p-2 border border-slate-300 rounded" />
+          <input type="email" id="f-email" placeholder="Email"                 class="w-full p-2 border border-slate-300 rounded" />
+          <textarea id="f-notes" placeholder="Notes" class="w-full p-2 border border-slate-300 rounded h-20"></textarea>
+          <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-900">Cancel</button>
+            <button type="submit" class="bg-purple-700 text-white px-4 py-2 rounded hover:bg-purple-800">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    let allContacts = [];
+
+    // ─── Auth flow ────────────────────────────────────────────────
+    async function checkAuth() {
+      try {
+        const r = await fetch('/api/auth/me');
+        if (r.ok) {
+          const me = await r.json();
+          showApp(me);
+          return true;
+        }
+      } catch (e) {}
+      showLogin();
+      return false;
+    }
+
+    function showLogin() {
+      document.getElementById('login-screen').classList.remove('hidden');
+      document.getElementById('app-screen').classList.add('hidden');
+    }
+
+    function showApp(me) {
+      document.getElementById('login-screen').classList.add('hidden');
+      document.getElementById('app-screen').classList.remove('hidden');
+      document.getElementById('me-display').innerText = me.display || me.username;
+      document.getElementById('me-source').innerText  = me.source === 'teleport' ? '✓ via Teleport SSO' : '🔑 password login';
+
+      // Admin gets the audit-log toggle button; everyone gets contacts view by default.
+      const isAdmin = me.username === 'admin';
+      document.getElementById('btn-audit-view').classList.toggle('hidden', !isAdmin);
+      showContactsView();
+
+      loadContacts();
+      loadCalls();
+    }
+
+    // ─── View switching ──────────────────────────────────────────
+    function showContactsView() {
+      document.getElementById('view-contacts').classList.remove('hidden');
+      document.getElementById('view-audit').classList.add('hidden');
+      document.getElementById('btn-contacts-view').classList.add('hidden');
+      // Show "Audit" toggle if admin (already set in showApp); show "+ New"
+      document.getElementById('btn-new-contact').classList.remove('hidden');
+    }
+
+    function showAuditView() {
+      document.getElementById('view-contacts').classList.add('hidden');
+      document.getElementById('view-audit').classList.remove('hidden');
+      document.getElementById('btn-contacts-view').classList.remove('hidden');
+      document.getElementById('btn-new-contact').classList.add('hidden');
+      loadAudit();
+    }
+
+    async function loadAudit() {
+      const tbody = document.getElementById('audit-rows');
+      tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-slate-400 text-center">Loading…</td></tr>';
+      try {
+        const r = await fetch('/api/audit/logins');
+        if (!r.ok) {
+          tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-red-600 text-center">Error: HTTP ${r.status}</td></tr>`;
+          return;
+        }
+        const rows = await r.json();
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-slate-400 text-center">No login attempts yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map(a => {
+          const status = a.success
+            ? '<span class="inline-block px-2 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-700">SUCCESS</span>'
+            : '<span class="inline-block px-2 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700">FAIL</span>';
+          return `
+            <tr class="border-t border-slate-100">
+              <td class="px-4 py-2 text-slate-600 whitespace-nowrap">${new Date(a.attempted_at).toLocaleString()}</td>
+              <td class="px-4 py-2 font-medium">${esc(a.username || '—')}</td>
+              <td class="px-4 py-2 text-slate-500 font-mono text-xs">${esc(a.ip_address || '—')}</td>
+              <td class="px-4 py-2">${status}</td>
+              <td class="px-4 py-2 text-slate-500 text-xs">${esc(a.failure_code || '')}</td>
+            </tr>`;
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-red-600 text-center">${esc(e.message)}</td></tr>`;
+      }
+    }
+
+    document.getElementById('login-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      const errEl    = document.getElementById('login-error');
+      errEl.classList.add('hidden');
+      try {
+        const r = await fetch('/api/auth/login', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ username, password }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          errEl.innerText = e.error || 'Login failed';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        const me = await r.json();
+        showApp({ display: me.display, username: me.username, source: 'local' });
+      } catch (e) {
+        errEl.innerText = 'Network error';
+        errEl.classList.remove('hidden');
+      }
+    };
+
+    async function logout() {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    // ─── Contacts ──────────────────────────────────────────────────
+    async function loadContacts() {
+      const r = await fetch('/api/contacts');
+      if (!r.ok) { showLogin(); return; }
+      allContacts = await r.json();
+      render();
+    }
+
+    function render() {
+      const q = (document.getElementById('search').value || '').toLowerCase();
+      const list = allContacts.filter(c =>
+        !q ||
+        (c.name && c.name.toLowerCase().includes(q)) ||
+        (c.role && c.role.toLowerCase().includes(q)) ||
+        (c.desk && c.desk.toLowerCase().includes(q))
+      );
+      const el = document.getElementById('contacts');
+      if (list.length === 0) {
+        el.innerHTML = '<p class="text-slate-500 col-span-full">No contacts.</p>';
+        return;
+      }
+      el.innerHTML = list.map(c => {
+        const dialNum = (c.phone || '').replace(/[^+\d]/g, '');
+        return `
+        <div class="bg-white rounded-lg shadow hover:shadow-md transition p-5 flex flex-col">
+          <div class="flex justify-between items-start">
+            <div>
+              <h3 class="font-bold text-lg leading-tight">${esc(c.name)}</h3>
+              <p class="text-sm text-purple-700 font-medium">${esc(c.role)}</p>
+              ${c.desk ? `<p class="text-xs text-slate-500 mt-0.5">${esc(c.desk)}</p>` : ''}
+            </div>
+            <div class="flex gap-2 text-slate-400">
+              <button onclick="editContact(${c.id})" title="Edit"   class="hover:text-purple-700">✎</button>
+              <button onclick="del(${c.id}, '${esc(c.name).replace(/'/g,"\\'")}')" title="Delete" class="hover:text-red-600">✕</button>
+            </div>
+          </div>
+          <div class="mt-3 text-sm space-y-1 flex-1">
+            ${c.email ? `<div class="text-slate-600">📧 ${esc(c.email)}</div>` : ''}
+            <div class="text-slate-600">📞 ${esc(c.phone)}</div>
+            ${c.notes ? `<p class="text-xs text-slate-500 mt-2 italic">${esc(c.notes)}</p>` : ''}
+          </div>
+          <a href="tel:${dialNum}" onclick="logCall(${c.id})"
+             class="mt-4 block text-center bg-purple-700 hover:bg-purple-800 text-white py-2 rounded-md font-semibold">
+            📞 Call ${esc((c.name || '').split(' ')[0])}
+          </a>
+        </div>`;
+      }).join('');
+    }
+
+    document.getElementById('search').addEventListener('input', render);
+
+    function newContact() {
+      document.getElementById('modal-title').innerText = 'New Contact';
+      document.getElementById('contact-form').reset();
+      document.getElementById('f-id').value = '';
+      document.getElementById('modal').classList.remove('hidden');
+    }
+
+    async function editContact(id) {
+      const c = await fetch('/api/contacts/' + id).then(r => r.json());
+      document.getElementById('modal-title').innerText = 'Edit Contact';
+      document.getElementById('f-id').value    = c.id;
+      document.getElementById('f-name').value  = c.name;
+      document.getElementById('f-role').value  = c.role  || '';
+      document.getElementById('f-desk').value  = c.desk  || '';
+      document.getElementById('f-phone').value = c.phone;
+      document.getElementById('f-email').value = c.email || '';
+      document.getElementById('f-notes').value = c.notes || '';
+      document.getElementById('modal').classList.remove('hidden');
+    }
+
+    async function del(id, name) {
+      if (!confirm(`Delete ${name}?`)) return;
+      await fetch('/api/contacts/' + id, { method: 'DELETE' });
+      loadContacts();
+    }
+
+    function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+    document.getElementById('contact-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('f-id').value;
+      const body = {
+        name:  document.getElementById('f-name').value,
+        role:  document.getElementById('f-role').value || null,
+        desk:  document.getElementById('f-desk').value || null,
+        phone: document.getElementById('f-phone').value,
+        email: document.getElementById('f-email').value || null,
+        notes: document.getElementById('f-notes').value || null,
+      };
+      const url    = id ? '/api/contacts/' + id : '/api/contacts';
+      const method = id ? 'PUT' : 'POST';
+      await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      closeModal();
+      loadContacts();
+      loadCalls();
+    };
+
+    function logCall(id) {
+      fetch('/api/contacts/' + id + '/log-call', { method: 'POST' }).catch(() => {});
+      setTimeout(loadCalls, 1500);
+    }
+
+    async function loadCalls() {
+      try {
+        const calls = await fetch('/api/calls').then(r => r.json());
+        const tbody = document.getElementById('call-rows');
+        tbody.innerHTML = (calls && calls.length)
+          ? calls.map(c => `
+            <tr class="border-t border-slate-100">
+              <td class="px-4 py-2 text-slate-600">${new Date(c.called_at).toLocaleString()}</td>
+              <td class="px-4 py-2 font-medium">${esc(c.caller)}</td>
+              <td class="px-4 py-2">${esc(c.contact_name)}</td>
+              <td class="px-4 py-2 text-slate-500">${esc(c.phone)}</td>
+            </tr>`).join('')
+          : '<tr><td colspan="4" class="px-4 py-3 text-slate-500">No calls yet.</td></tr>';
+      } catch {}
+    }
+
+    setInterval(() => { if (!document.getElementById('app-screen').classList.contains('hidden')) loadCalls(); }, 10000);
+
+    checkAuth();
+  </script>
+</body>
+</html>
