@@ -1,0 +1,85 @@
+# In-cluster PostgreSQL for trading-contacts.
+# Replaces Aurora to save ~$42/month. Stores ~10GB on a gp3 PVC (~$0.80/mo).
+#
+# Service DNS inside the cluster: trading-pg.trading.svc.cluster.local
+# Same user/password/database as the Aurora cluster — credentials come
+# from the existing trading-contacts-db Secret. No password changes needed.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-pg
+  namespace: trading
+  labels:
+    app: trading-pg
+spec:
+  clusterIP: None              # headless — pods get stable DNS via the StatefulSet
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgres
+  selector:
+    app: trading-pg
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trading-pg
+  namespace: trading
+  labels:
+    app: trading-pg
+spec:
+  serviceName: trading-pg
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trading-pg
+  template:
+    metadata:
+      labels:
+        app: trading-pg
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: "trading_app"
+            - name: POSTGRES_DB
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trading-contacts-db
+                  key: DB_PASSWORD
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trading_app", "-d", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trading_app", "-d", "postgres"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+        # EKS Auto Mode default storage class is gp3

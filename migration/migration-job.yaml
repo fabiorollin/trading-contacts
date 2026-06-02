@@ -1,0 +1,104 @@
+# One-shot pg_dump | psql migration job.
+# Reads from Aurora, writes to the in-cluster Postgres StatefulSet.
+# Both sides use the same password from the trading-contacts-db Secret.
+#
+# Run AFTER the trading-pg StatefulSet is Ready.
+# Run BEFORE you change trading-contacts' DB_HOST.
+---
+# NOTE: The aurora-master Secret must already exist in the trading namespace
+# before this Job is applied. Create it with:
+#
+#   $SECRET_ARN = (aws rds describe-db-clusters --region us-east-1 `
+#     --db-cluster-identifier database-2 `
+#     --query "DBClusters[0].MasterUserSecret.SecretArn" --output text)
+#   $MASTER_PWD = (aws secretsmanager get-secret-value --region us-east-1 `
+#     --secret-id $SECRET_ARN --query "SecretString" --output text | ConvertFrom-Json).password
+#   kubectl create secret generic aurora-master -n trading `
+#     --from-literal=MASTER_PASSWORD=$MASTER_PWD
+#
+# Delete the secret once migration is verified and cutover is complete.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pg-migrate-aurora-to-local
+  namespace: trading
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: postgres:17-alpine
+          env:
+            # Master credentials for reading from Aurora — pg_dump as superuser
+            - name: SRC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-master
+                  key: MASTER_PASSWORD
+            # App credentials for writing to the new in-cluster DB
+            - name: DST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trading-contacts-db
+                  key: DB_PASSWORD
+            - name: SRC_HOST
+              value: "database-2.cluster-cilmq64861va.us-east-1.rds.amazonaws.com"
+            - name: DST_HOST
+              value: "trading-pg.trading.svc.cluster.local"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "==> Source: $SRC_HOST (as postgres master)"
+              echo "==> Dest:   $DST_HOST (as trading_app)"
+
+              echo
+              echo "==> Waiting for destination to accept connections..."
+              export PGPASSWORD="$DST_PASSWORD"
+              for i in $(seq 1 30); do
+                if pg_isready -h "$DST_HOST" -p 5432 -U trading_app -d postgres >/dev/null 2>&1; then
+                  echo "Destination is ready."
+                  break
+                fi
+                echo "  not ready yet (attempt $i/30)..."
+                sleep 2
+              done
+
+              echo
+              echo "==> Source schema/row count BEFORE migration:"
+              export PGPASSWORD="$SRC_PASSWORD"
+              psql -h "$SRC_HOST" -U postgres -d postgres -c "\dt"
+              psql -h "$SRC_HOST" -U postgres -d postgres -tAc \
+                "SELECT schemaname || '.' || relname || ': ' || n_live_tup
+                   FROM pg_stat_user_tables ORDER BY relname;"
+
+              echo
+              echo "==> Streaming pg_dump (as postgres) | psql (as trading_app)..."
+              # SRC_PASSWORD is still set for pg_dump
+              pg_dump \
+                --host="$SRC_HOST" \
+                --username=postgres \
+                --dbname=postgres \
+                --no-owner --no-acl \
+                --clean --if-exists \
+                --verbose \
+              | PGPASSWORD="$DST_PASSWORD" psql \
+                --host="$DST_HOST" \
+                --username=trading_app \
+                --dbname=postgres \
+                --variable=ON_ERROR_STOP=1
+
+              echo
+              echo "==> Destination schema/row count AFTER migration:"
+              export PGPASSWORD="$DST_PASSWORD"
+              psql -h "$DST_HOST" -U trading_app -d postgres -c "\dt"
+              psql -h "$DST_HOST" -U trading_app -d postgres -tAc \
+                "SELECT schemaname || '.' || relname || ': ' || n_live_tup
+                   FROM pg_stat_user_tables ORDER BY relname;"
+
+              echo
+              echo "==> Migration complete."

@@ -57,13 +57,16 @@ async function logLoginAttempt(req, success, failureCode = null) {
   }
 }
 
+// SSL is on by default (for Aurora / RDS), but can be disabled with
+// DB_SSL=false (e.g. for in-cluster Postgres that wasn't configured with TLS).
+const useSsl = (process.env.DB_SSL || 'true').toLowerCase() !== 'false';
 const pool = new Pool({
   host:     process.env.DB_HOST,
   port:     parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'postgres',
   user:     process.env.DB_USER || 'trading_app',
   password: process.env.DB_PASSWORD,
-  ssl:      { rejectUnauthorized: false },
+  ssl:      useSsl ? { rejectUnauthorized: false } : false,
   max:      5,
 });
 
@@ -119,7 +122,8 @@ async function auth(req, res, next) {
     }
   }
 
-  // (2) session cookie
+  // (2) session cookie — covers both registered users (source: 'local') and
+  // demo-entry visitors who provided just an email (source: 'demo').
   const cookie = req.cookies && req.cookies.session;
   if (cookie) {
     try {
@@ -127,7 +131,7 @@ async function auth(req, res, next) {
       req.user = {
         username: decoded.username,
         display:  decoded.display,
-        source:   'local',
+        source:   decoded.role === 'demo' ? 'demo' : 'local',
       };
       return next();
     } catch (e) {
@@ -189,6 +193,58 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     });
     await logLoginAttempt(req, true);
     res.json({ username: u.username, display: u.display_name });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Demo entry: any visitor enters their email and gets an 8h session.
+//
+// Lower-trust than the password-backed login above: we don't verify the email,
+// we don't check it against the users table. We just sign a JWT with role='demo'
+// and the supplied email so it shows up in the audit log.
+//
+// The contacts data is mock; visitors can edit/delete freely. A weekly CronJob
+// re-seeds the table.
+app.post('/api/auth/demo', async (req, res) => {
+  const raw = (req.body && req.body.email) || '';
+  const email = String(raw).trim().toLowerCase();
+  // Light validation: must look vaguely like an email or be at least 3 chars.
+  if (!email || email.length < 3 || email.length > 200) {
+    return res.status(400).json({ error: 'Please enter your email or name to continue' });
+  }
+  try {
+    const token = jwt.sign(
+      { username: email, display: email, role: 'demo' },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+    res.cookie('session', token, {
+      httpOnly: true,
+      secure:   true,
+      sameSite: 'lax',
+      maxAge:   8 * 60 * 60 * 1000,
+    });
+    // Audit-log this as a 'demo' login attempt — surfaces in the audit panel.
+    await pool.query(
+      `INSERT INTO login_attempts (username, ip_address, user_agent, success, failure_code)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [email, req.ip || null, req.headers['user-agent'] || null, true, 'demo']
+    );
+    // Optional Slack ping — fire-and-forget, never blocks the response.
+    if (process.env.SLACK_WEBHOOK_URL) {
+      const ref = req.headers.referer ? new URL(req.headers.referer).hostname : 'direct';
+      const ua  = req.headers['user-agent'] || '';
+      const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox/.test(ua) ? 'Firefox' : /Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : 'Unknown';
+      const msg = `🟣 *trading-contacts demo entered* by \`${email}\`\n   ${browser} · ref: ${ref} · IP: ${req.ip || 'unknown'}`;
+      fetch(process.env.SLACK_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: msg }),
+      }).catch(() => {});
+    }
+    res.json({ username: email, display: email, role: 'demo' });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -314,7 +370,117 @@ app.get('/api/audit/logins', requireAuth, async (req, res) => {
 // ── Static frontend (login page is also static; auth happens via fetch)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ──────────────────────────────────────────────────────────────────────────
+// Realtime: presence + 1:1 direct messages over Socket.IO
+//
+// Design notes:
+//   - Auth: read the `session` cookie from the websocket handshake and verify
+//     the JWT. We support both 'local' (registered) and 'demo' users.
+//   - Presence: in-memory Map. Keyed by socket id, but UI dedupes by username
+//     so multiple tabs from the same user collapse into one entry.
+//   - DMs: ephemeral, not persisted. If both ends are connected we deliver;
+//     otherwise the message is dropped (caller sees "user went offline").
+//   - Single-pod: this state lives in process memory. If you scale beyond
+//     one replica, swap in Redis pub/sub. For now we have replicas: 1.
+// ──────────────────────────────────────────────────────────────────────────
+
+const http   = require('http');
+const cookie = require('cookie');
+const { Server: SocketIOServer } = require('socket.io');
+
+const httpServer = http.createServer(app);
+const io = new SocketIOServer(httpServer, {
+  // Same-origin only — no CORS needed since we serve the page from here.
+  cors: { origin: false },
+  // Tune for ALB long-poll fallback if WebSocket upgrade is blocked anywhere.
+  transports: ['websocket', 'polling'],
+});
+
+// Map<socketId, { username, display, source, connectedAt }>
+const presence = new Map();
+
+function presenceList() {
+  // Dedupe by username so multiple tabs from one user become one entry.
+  const byUser = new Map();
+  for (const [, info] of presence) {
+    const existing = byUser.get(info.username);
+    if (!existing || info.connectedAt < existing.connectedAt) {
+      byUser.set(info.username, info);
+    }
+  }
+  return Array.from(byUser.values()).sort((a, b) => a.connectedAt - b.connectedAt);
+}
+
+function broadcastPresence() {
+  io.emit('presence:list', presenceList());
+}
+
+// Auth middleware — runs on every websocket handshake.
+io.use((socket, next) => {
+  const raw = socket.handshake.headers.cookie || '';
+  const parsed = cookie.parse(raw);
+  const token = parsed.session;
+  if (!token) return next(new Error('unauthenticated'));
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    socket.data.user = {
+      username: decoded.username,
+      display:  decoded.display,
+      source:   decoded.role === 'demo' ? 'demo' : 'local',
+    };
+    next();
+  } catch {
+    next(new Error('bad token'));
+  }
+});
+
+io.on('connection', (socket) => {
+  const u = socket.data.user;
+  presence.set(socket.id, { ...u, connectedAt: Date.now() });
+  // Send the current presence list to the just-connected user, then announce.
+  socket.emit('presence:list', presenceList());
+  broadcastPresence();
+
+  // Direct message: { to: <username>, text: <string> }
+  socket.on('dm:send', (msg) => {
+    if (!msg || typeof msg.to !== 'string' || typeof msg.text !== 'string') return;
+    const text = msg.text.trim().slice(0, 1000);
+    if (!text) return;
+    // Find all sockets currently connected as the target user (covers multiple tabs).
+    const targets = [...presence.entries()]
+      .filter(([, info]) => info.username === msg.to)
+      .map(([sid]) => sid);
+    const payload = {
+      from:       u.username,
+      fromDisplay:u.display,
+      text,
+      at:         Date.now(),
+    };
+    if (targets.length === 0) {
+      // Echo back to sender so their UI can show "user is offline"
+      socket.emit('dm:undelivered', { to: msg.to, text, reason: 'offline' });
+      return;
+    }
+    targets.forEach((sid) => io.to(sid).emit('dm:received', payload));
+    // Echo back to sender so their UI can show their own message in the thread
+    socket.emit('dm:received', { ...payload, to: msg.to, self: true });
+  });
+
+  // Lightweight typing indicator
+  socket.on('dm:typing', ({ to, on }) => {
+    const targets = [...presence.entries()]
+      .filter(([, info]) => info.username === to)
+      .map(([sid]) => sid);
+    targets.forEach((sid) => io.to(sid).emit('dm:typing', { from: u.username, on: !!on }));
+  });
+
+  socket.on('disconnect', () => {
+    presence.delete(socket.id);
+    broadcastPresence();
+  });
+});
+
 const PORT = process.env.PORT || 8080;
 ensureUsers().then(() => {
-  app.listen(PORT, () => console.log(`trading-contacts v2 listening on :${PORT}`));
+  httpServer.listen(PORT, () => console.log(`trading-contacts v2 listening on :${PORT} (with realtime presence)`));
 });
